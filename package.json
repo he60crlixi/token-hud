@@ -1,0 +1,23 @@
+{
+  "name": "opencode-token-hud",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A separate desktop window that shows live tok/s and token usage for the current OpenCode session, opened with the /hud command.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "license": "MIT",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "tokens",
+    "tok/s",
+    "hud"
+  ],
+  "dependencies": {
+    "@opencode/client": "2.0.16",
+    "@opencode/plugin": "2.0.16"
+  }
+}

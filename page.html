@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Token HUD</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: #0d1117; color: #e6edf3;
+    font: 12px/1.5 "Cascadia Code", Consolas, monospace;
+    padding: 12px 14px; overflow: hidden; user-select: none;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .speed { display: flex; align-items: baseline; gap: 8px; }
+  .speed b {
+    font-size: 40px; line-height: 1; font-weight: 700;
+    font-variant-numeric: tabular-nums; letter-spacing: -1px;
+  }
+  .unit { color: #6b7280; font-size: 13px; }
+  .status {
+    margin-left: auto; font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    background: #1f2937; color: #9ca3af; white-space: nowrap;
+  }
+  .status.on { background: #14351f; color: #4ade80; }
+  .status.think { background: #2a2410; color: #fbbf24; }
+  .status.err { background: #3a1515; color: #f87171; }
+  .bar { height: 3px; background: #1f2937; border-radius: 2px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: #4ade80; transition: width .2s; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 3px 0; font-variant-numeric: tabular-nums; }
+  td.k { color: #9ca3af; }
+  td.v { text-align: right; font-weight: 600; }
+  tr.total td { border-top: 1px solid #1f2937; padding-top: 6px; }
+  tr.total td.v { color: #60a5fa; }
+  td.cost { color: #fbbf24; }
+  .empty { color: #6b7280; font-size: 12px; text-align: center; padding: 24px 0; }
+  .foot { margin-top: auto; color: #374151; font-size: 10px; text-align: right; }
+</style>
+<body>
+  <div class="row" style="display:flex;align-items:center;gap:10px">
+    <div class="speed"><span id="speed">0</span><span class="unit">tok/s</span></div>
+    <div id="status" class="status">未连接</div>
+  </div>
+  <div class="bar"><i id="bar"></i></div>
+
+  <table id="table">
+    <tr><td class="k">输出</td><td class="v" id="r-out">0</td></tr>
+    <tr><td class="k">思考</td><td class="v" id="r-reason">0</td></tr>
+    <tr><td class="k">输入</td><td class="v" id="r-in">0</td></tr>
+    <tr><td class="k">缓存命中</td><td class="v" id="r-cache">0</td></tr>
+    <tr><td class="k">调用步数</td><td class="v" id="r-steps">0</td></tr>
+    <tr class="total"><td class="k">总计</td><td class="v" id="r-total">0</td></tr>
+    <tr><td class="k">费用</td><td class="v cost" id="r-cost">$0.0000</td></tr>
+  </table>
+  <div class="foot" id="sid"></div>
+
+<script>
+"use strict";
+// Same estimation model as the terminal token-stats plugin: ~4 chars per token,
+// 60s sliding window for the live rate.
+const params = new URLSearchParams(location.search);
+const SESSION = params.get("session") || "";
+document.getElementById("sid").textContent = SESSION ? SESSION.slice(0, 24) : "";
+
+var totals = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, steps: 0 };
+var running = false, thinking = false;
+
+// ---- seed from the command that opened the window --------------------------
+try {
+  const seed = JSON.parse(new URLSearchParams(location.search).get("seed") || "null");
+  if (seed && seed.tokens) applyTokens(seed.tokens);
+  if (seed && typeof seed.cost === "number") totals.cost = seed.cost;
+} catch (e) {}
+
+function fmt(n) {
+  n = Math.round(n);
+  return n >= 1000 ? n.toLocaleString("en-US") : String(n);
+}
+function set(id, text) { var el = document.getElementById(id); if (el) el.textContent = text; }
+
+function applyTokens(t) {
+  if (!t) return;
+  if (t.output != null) totals.output = t.output;
+  if (t.input != null) totals.input = t.input;
+  if (t.reasoning != null) totals.reasoning = t.reasoning;
+  if (t.cache) { totals.cacheRead = t.cache.read || 0; totals.cacheWrite = t.cache.write || 0; }
+}
+function addTokens(t) {
+  if (!t) return;
+  totals.output += t.output || 0;
+  totals.input += t.input || 0;
+  totals.reasoning += t.reasoning || 0;
+  if (t.cache) { totals.cacheRead += t.cache.read || 0; totals.cacheWrite += t.cache.write || 0; }
+}
+function grandTotal() {
+  return totals.input + totals.output + totals.reasoning + totals.cacheRead + totals.cacheWrite;
+}
+
+// --- speed: 4 chars/token over a 60s sliding window (ported from tui.tsx) ---
+var chars = { out: 0, think: 0 };
+var samples = [];
+function pushChars(kind, n) {
+  if (kind === "think") chars.think += n; else chars.out += n;
+  samples.push({ t: Date.now(), c: chars.out + chars.think });
+  if (samples.length > 4000) samples.splice(0, samples.length - 4000);
+}
+function speedNow() {
+  var now = Date.now(), cut = now - 60000;
+  while (samples.length && samples[0].t < cut) samples.shift();
+  if (!samples.length) return 0;
+  var oldest = samples[0], charsDelta = chars.out + chars.think - oldest.c;
+  var seconds = Math.max((now - oldest.t) / 1000, 0.5);
+  return Math.max(0, charsDelta / 4 / seconds);
+}
+
+function render() {
+  set("r-out", fmt(totals.output));
+  set("r-reason", fmt(totals.reasoning));
+  set("r-in", fmt(totals.input));
+  set("r-cache", fmt(totals.cacheRead));
+  set("r-steps", fmt(totals.steps));
+  set("r-total", fmt(grandTotal()));
+  set("r-cost", "$" + (totals.cost || 0).toFixed(4));
+}
+
+setInterval(function () {
+  var speed = running ? speedNow() : 0;
+  set("speed", speed >= 10 ? Math.round(speed) : speed.toFixed(1));
+  document.getElementById("bar").style.width = Math.min(100, (speed / 60) * 100) + "%";
+}, 200);
+
+var es = new EventSource("/events");
+es.onopen = function () { setStatus("idle", "空闲"); };
+es.onerror = function () { setStatus("err", "连接中断"); };
+
+function setStatus(kind, text) {
+  var el = document.getElementById("status");
+  el.className = "status" + (kind === "on" ? " on" : kind === "think" ? " think" : kind === "err" ? " err" : "");
+  el.textContent = text;
+}
+
+es.onmessage = function (message) {
+  var ev;
+  try { ev = JSON.parse(message.data); } catch { return; }
+  var d = (ev && ev.data) || {};
+  if (d.sessionID && SESSION && d.sessionID !== SESSION) return;
+
+  switch (ev.type) {
+    case "session.step.started":
+      running = true; thinking = true; setStatus("think", "思考中"); break;
+    case "session.execution.started":
+      running = true; thinking = false; setStatus("on", "生成中"); break;
+    case "session.text.delta":
+      if (typeof d.delta === "string") pushChars("out", d.delta.length);
+      if (!running) { running = true; }
+      setStatus("on", "生成中"); break;
+    case "session.reasoning.delta":
+      if (typeof d.delta === "string") pushChars("think", d.delta.length);
+      if (!running) { running = true; }
+      setStatus("think", "思考中"); break;
+    case "session.step.ended":
+    case "session.step.failed":
+      addTokens(d.tokens);
+      if (d.cost != null) totals.cost += d.cost; 
+      totals.steps += 1;
+      running = false; thinking = false; setStatus("idle", "空闲");
+      samples.length = 0; break;
+    case "session.usage.updated":
+      applyTokens(d.tokens);
+      if (d.cost != null) totals.cost = d.cost;
+      break;
+    default:
+      // execution.* terminal states end the run
+      if (typeof ev.type === "string" && ev.type.indexOf("execution.") === 0 && ev.type !== "session.execution.started") {
+        running = false; thinking = false; setStatus("idle", "空闲");
+      }
+  }
+  render();
+};
+
+render();
+</script>
+</body>
+</html>
