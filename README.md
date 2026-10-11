@@ -29,7 +29,8 @@ The OpenCode desktop GUI has no runtime extension slot for custom panels, and pl
 ## Requirements
 
 - OpenCode with the **server (`@opencode/plugin` v2)** plugin API
-- **Microsoft Edge** (`msedge`) on `PATH` — used in `--app=` mode, which needs no Electron and no extra dependency
+- A **Chromium-based browser** — **Microsoft Edge** or **Google Chrome** — used in `--app=` mode, so no Electron and no extra dependency
+- Runs on **Windows, macOS and Linux**, on either the **Bun or Node** plugin host (only Node built-ins are used)
 - [Bun](https://bun.sh) to install the plugin's dependencies (or copy `node_modules` from another plugin)
 
 ## Install
@@ -72,7 +73,7 @@ OpenCode server (Bun)
        ├─ relays token-relevant events over SSE  (/events)
        └─ serves the window page              (/)
                           ▲
-       /hud ──► msedge --app=http://127.0.0.1:7788/?session=...  (the window)
+       /hud ──► edge/chrome --app=http://127.0.0.1:7788/?session=...  (the window)
 ```
 
 - Several plugin instances are loaded (one per workspace location). The first one to bind port **7788** becomes the data server; the others only register the `/hud` command.
@@ -86,6 +87,7 @@ Delete the plugin folder and remove its line from the `plugins` array. Nothing e
 ## Notes / limitations
 
 - The Edge app window **cannot be pinned always-on-top** with Edge flags alone (needs extra Win32 calls).
+- The browser is auto-detected (Edge/Chrome); if neither is found, open `http://127.0.0.1:7788/?session=<id>` manually.
 - Speed is **estimated** from character counts, not from provider-reported timing; totals come from real usage events.
 - One shared window per `OPENCODE_SESSION_ID`; running `/hud` again opens another window.
 

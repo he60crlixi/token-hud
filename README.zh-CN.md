@@ -29,7 +29,8 @@ OpenCode 桌面版 GUI 没有可加载自定义面板的运行时扩展位置,�
 ## 环境要求
 
 - 支持 **服务端(`@opencode/plugin` v2)** 插件 API 的 OpenCode
-- `PATH` 里能用的 **Microsoft Edge**(`msedge`)——用它的 `--app=` 模式,不需要 Electron,也不需要额外依赖
+- 一个 **Chromium 内核浏览器**(**Microsoft Edge** 或 **Google Chrome**)——用 `--app=` 模式,不需要 Electron,也不需要额外依赖
+- 支持 **Windows / macOS / Linux**;Bun 或 Node 插件宿主都能跑(只用 Node 内置模块)
 - 用 [Bun](https://bun.sh) 安装插件依赖(或从别的插件复制 `node_modules`)
 
 ## 安装
@@ -72,7 +73,7 @@ OpenCode 服务端 (Bun)
        ├─ 通过 SSE 转发与 token 相关的事件   (/events)
        └─ 提供窗口页面                        (/)
                           ▲
-       /hud ──► msedge --app=http://127.0.0.1:7788/?session=...   (窗口)
+       /hud ──► edge/chrome --app=http://127.0.0.1:7788/?session=...   (窗口)
 ```
 
 - 插件会按工作区位置加载多个实例。**先抢到 7788 端口**的那个成为数据服务,其余实例只负责注册 `/hud` 命令。
@@ -86,6 +87,7 @@ OpenCode 服务端 (Bun)
 ## 说明 / 局限
 
 - Edge 的 app 窗口**仅靠命令行无法置顶**(需要额外调用 Win32)。
+- 浏览器会自动探测(Edge/Chrome);都没有时,手动打开 `http://127.0.0.1:7788/?session=<会话ID>` 即可。
 - 速度是**按字符数估算**的,并非模型自报的计时;总量来自真实的 usage 事件。
 - 每个 `OPENCODE_SESSION_ID` 共用一个窗口;再次运行 `/hud` 会再开一个。
 

@@ -1,22 +1,28 @@
 import { Plugin } from "@opencode/plugin"
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs"
+import { spawn } from "node:child_process"
+import { readFileSync, writeFileSync, appendFileSync } from "node:fs"
+import { createServer } from "node:http"
+import { fileURLToPath } from "node:url"
 
 // ===========================================================================
 // OpenCode Token HUD
 //
 // A tiny local HTTP server, owned by one plugin instance, that streams the
-// token-relevant session events to a chromeless Edge window opened by the
-// `/hud` command.  The window renders live tok/s and session totals.
+// token-relevant session events to a chromeless Chromium window (Edge/Chrome)
+// opened by the `/hud` command.  The window renders live tok/s and totals.
 //
 // Why an HTTP server: the desktop GUI has no runtime extension slot, but a
-// server-side plugin can spawn a separate always-local window.  One instance
-// binds PORT; the rest just register the command and open the same window.
+// server-side plugin can open its own local window.  One instance binds PORT;
+// the rest just register the command and open the same window.
+//
+// Only Node built-ins are used (node:http, node:child_process, node:fs), so it
+// runs on either the Bun or the Node plugin host, on Windows/macOS/Linux.
 // ===========================================================================
 
 const PORT = 7788
-const DIR = import.meta.dir
-const LOG = DIR + "/hud.log"
-const PAGE = DIR + "/page.html"
+const DIR = fileURLToPath(new URL(".", import.meta.url))
+const LOG = DIR + "hud.log"
+const PAGE = DIR + "page.html"
 
 // Event types the window needs; everything else is dropped before relaying.
 const RELAY = new Set([
@@ -38,15 +44,41 @@ function log(message) {
   } catch {}
 }
 
-function openWindow(sessionID, seed) {
-  const url =
-    `http://127.0.0.1:${PORT}/?session=${encodeURIComponent(sessionID)}` +
-    `&seed=${encodeURIComponent(seed)}`
-  // Edge app mode gives a chrome-less window with zero extra dependencies.
-  return Bun.spawn(["cmd", "/c", "start", "", "msedge", `--app=${url}`, "--window-size=380,270"], {
-    stdout: "ignore",
-    stderr: "ignore",
-  })
+// Open a chromeless app window, trying the platform's likely Chromium browsers.
+function openWindow(url) {
+  const app = "--app=" + url
+  const size = "--window-size=380,270"
+  const options = { detached: true, stdio: "ignore" }
+  const attempts = []
+  if (process.platform === "win32") {
+    attempts.push(["cmd", ["/c", "start", "", "msedge", app, size]])
+    attempts.push(["cmd", ["/c", "start", "", "chrome", app, size]])
+  } else if (process.platform === "darwin") {
+    attempts.push(["open", ["-na", "Microsoft Edge", "--args", app, size]])
+    attempts.push(["open", ["-na", "Google Chrome", "--args", app, size]])
+  } else {
+    for (const bin of [
+      "microsoft-edge",
+      "microsoft-edge-stable",
+      "google-chrome",
+      "google-chrome-stable",
+      "chromium",
+      "chromium-browser",
+    ]) {
+      attempts.push([bin, [app, size]])
+    }
+  }
+  const tryOne = (index) => {
+    if (index >= attempts.length) {
+      log("no Chromium browser found; open " + url + " manually")
+      return
+    }
+    const [command, args] = attempts[index]
+    const child = spawn(command, args, options)
+    child.once("error", () => tryOne(index + 1))
+    child.unref()
+  }
+  tryOne(0)
 }
 
 export default Plugin.define({
@@ -65,65 +97,33 @@ export default Plugin.define({
           } catch (error) {
             log("seed failed: " + String(error))
           }
-          try {
-            openWindow(sessionID, seed)
-            log("opened window for " + sessionID)
-          } catch (error) {
-            log("spawn failed: " + String(error))
-          }
+          openWindow(`http://127.0.0.1:${PORT}/?session=${encodeURIComponent(sessionID)}&seed=${encodeURIComponent(seed)}`)
+          log("opened window for " + sessionID)
         },
       })
     })
 
     const clients = new Set()
-    const encoder = new TextEncoder()
     const abort = new AbortController()
     let relayed = 0
 
-    let server
-    try {
-      server = Bun.serve({
-        port: PORT,
-        hostname: "127.0.0.1",
-        fetch: (req) => handle(req),
-      })
-    } catch (error) {
-      // Another instance already owns the HUD; this one only opens windows.
-      log("port busy; non-owner instance: " + String(error).slice(0, 90))
-      return async () => {
-        await commandReg?.dispose?.()
-      }
-    }
-
-    try {
-      writeFileSync(LOG, "")
-    } catch {}
-    log("owner bound " + server.url)
-
-    function handle(req) {
-      const url = new URL(req.url)
+    function handle(req, res) {
+      const url = new URL(req.url, "http://127.0.0.1")
       if (url.pathname === "/events") {
-        let controller
-        const body = new ReadableStream({
-          start(c) {
-            controller = c
-            clients.add(c)
-            c.enqueue(encoder.encode(": connected\n\n"))
-          },
-          cancel() {
-            clients.delete(controller)
-          },
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream; charset=utf-8",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
         })
-        return new Response(body, {
-          headers: {
-            "content-type": "text/event-stream",
-            "cache-control": "no-cache",
-            connection: "keep-alive",
-          },
-        })
+        res.write(": connected\n\n")
+        clients.add(res)
+        req.on("close", () => clients.delete(res))
+        return
       }
       if (url.pathname === "/ping") {
-        return Response.json({ relayed, clients: clients.size })
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ relayed, clients: clients.size }))
+        return
       }
       if (url.pathname === "/") {
         let html = ""
@@ -132,20 +132,43 @@ export default Plugin.define({
         } catch (error) {
           html = "<pre>page.html missing: " + String(error) + "</pre>"
         }
-        return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } })
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" })
+        res.end(html)
+        return
       }
-      return new Response("not found", { status: 404 })
+      res.writeHead(404)
+      res.end("not found")
     }
+
+    const server = createServer(handle)
+    const bindError = await new Promise((resolve) => {
+      server.once("error", resolve)
+      server.listen(PORT, "127.0.0.1", () => resolve(null))
+    })
+    if (bindError) {
+      // Another instance already owns the HUD; this one only opens windows.
+      log("port busy; non-owner instance: " + String(bindError).slice(0, 90))
+      server.close()
+      return async () => {
+        await commandReg?.dispose?.()
+      }
+    }
+    server.on("error", (error) => log("server error: " + String(error).slice(0, 120)))
+
+    try {
+      writeFileSync(LOG, "")
+    } catch {}
+    log("owner bound http://127.0.0.1:" + PORT + "/")
 
     ;(async () => {
       try {
         for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
           if (!RELAY.has(event.type)) continue
           relayed += 1
-          const chunk = encoder.encode("data: " + JSON.stringify({ type: event.type, data: event.data }) + "\n\n")
+          const chunk = "data: " + JSON.stringify({ type: event.type, data: event.data }) + "\n\n"
           for (const client of clients) {
             try {
-              client.enqueue(chunk)
+              client.write(chunk)
             } catch {
               clients.delete(client)
             }
@@ -158,9 +181,13 @@ export default Plugin.define({
 
     return async () => {
       abort.abort()
-      try {
-        server.stop(true)
-      } catch {}
+      for (const client of clients) {
+        try {
+          client.end()
+        } catch {}
+      }
+      clients.clear()
+      server.close()
       await commandReg?.dispose?.()
       log("owner stopped")
     }
