@@ -1,95 +1,151 @@
-# opencode-token-hud
+# token-hud
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
-A separate desktop window that shows **live tok/s and token usage** for the current OpenCode session. Launch it with the slash command **`/hud`**.
-
-## What it does
-
-Run `/hud` in the composer and a small chromeless window opens showing:
+A separate desktop window showing **live tok/s and token usage** for the coding
+agent you are currently using.
 
 ```
    990 tok/s          生成中
 ▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂▂
-output              3,200
-reasoning             600
-input               1,000
-cache                 350
-steps                   1
-total               5,270
-cost              $0.0163
+输出              3,200
+思考                600
+输入              1,000
+缓存命中            350
+调用步数              1
+总计              5,270
+费用            $0.0163
 ```
 
-The window updates live while the model streams text and reasoning.
+## What it does
+
+A small chromeless window that updates live while your agent streams text and
+reasoning. It survives behind your editor, so you can glance at it instead of
+running `/stats`.
 
 ## Why
 
-The OpenCode desktop GUI has no runtime extension slot for custom panels, and plugins can only extend the `server` or `tui` surface. But a **server-side plugin** is free to open its own local window, so that is what this does — without recompiling anything.
+The OpenCode desktop GUI has no runtime extension slot for custom panels, and
+plugins can only extend the `server` or `tui` surface. But a server-side plugin
+is free to open its own local window — so that is what this does, without
+recompiling anything. That same trick works for any agent that can run a
+command, which is why this is now one core plus small adapters.
 
 ## Requirements
 
-- OpenCode with the **server (`@opencode/plugin` v2)** plugin API
-- A **Chromium-based browser** — **Microsoft Edge** or **Google Chrome** — used in `--app=` mode, so no Electron and no extra dependency
-- Runs on **Windows, macOS and Linux**, on either the **Bun or Node** plugin host (only Node built-ins are used)
-- [Bun](https://bun.sh) to install the plugin's dependencies (or copy `node_modules` from another plugin)
+- **Node 18+** or **Bun** (only Node built-ins are used by the core)
+- A **Chromium-based browser** — Microsoft Edge or Google Chrome — used in
+  `--app=` mode, so no Electron and no extra dependency
+- Windows, macOS or Linux
 
 ## Install
 
-1. Copy this folder into your OpenCode extensions directory, e.g.
+```bash
+git clone https://github.com/he60crlixi/token-hud
+cd token-hud
+node scripts/install.mjs          # shows what it found; changes nothing
+node scripts/install.mjs --apply  # writes the hooks, backing up each file
+```
 
-   ```
-   <your-config>/extensions/plugins/token-hud
-   ```
+Then restart the agent. `install.mjs` only touches files it can edit safely and
+leaves a `.bak` beside each one. If your OpenCode config contains comments it
+prints a snippet to paste instead of rewriting the file.
 
-2. Install its dependencies:
-
-   ```bash
-   cd <that folder>
-   bun install
-   ```
-
-3. Add the folder path to the `plugins` array in `opencode.jsonc`:
-
-   ```jsonc
-   {
-     "plugins": [
-       "C:/path/to/extensions/plugins/token-hud"
-     ]
-   }
-   ```
-
-4. OpenCode hot-reloads plugin changes; if `/hud` does not appear, restart the app.
+Nothing to install for other agents — see below.
 
 ## Usage
 
-Type `/hud` in the message composer. The window opens for the current session.
+```bash
+node bin/token-hud.mjs          # start the window, no agent required
+node bin/token-hud.mjs --open   # same thing, explicitly
+npx token-hud --port 9000       # a different port
+```
+
+With OpenCode, type **`/hud`** in the composer.
+
+The window also works with **no agent at all**. Push your own numbers in from
+anything that can run a shell command:
+
+```bash
+curl -X POST http://127.0.0.1:7788/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"type":"session.step.ended","data":{"sessionID":"x",
+       "tokens":{"input":1000,"output":3200},"cost":0.016}}'
+```
+
+## Supported agents
+
+| Agent | tok/s | Totals | Status |
+|---|---|---|---|
+| **OpenCode** | live, per token | exact | **verified** |
+| **Claude Code** | bursty (tool boundaries) | exact | unverified |
+| **Codex CLI** | bursty | exact | unverified |
+| **Gemini CLI** | bursty | approximate | unverified |
+| anything else | — | — | use `POST /ingest` |
+
+**Unverified** means the adapter was written against public documentation but
+never run, because that agent was not installed on the development machine.
+Each one has a `--probe` mode that prints exactly what it sees — run that first:
+
+```bash
+node adapters/claude-code.mjs --probe   # feed it a hook payload on stdin
+node adapters/codex.mjs --probe         # prints the newest rollout transcript
+echo '{}' | node adapters/gemini.mjs --probe
+```
+
+Only OpenCode has a real event bus, so only OpenCode gets a smooth per-token
+rate. Claude Code's hooks fire at tool boundaries and never per token; there is
+no way around that short of giving up its interactive TUI.
+See [docs/AGENTS.md](docs/AGENTS.md) for the full explanation.
 
 ## How it works
 
 ```
-OpenCode server (Bun)
-  └─ token-hud plugin
-       ├─ one instance binds 127.0.0.1:7788 and subscribes to session events
-       ├─ relays token-relevant events over SSE  (/events)
-       └─ serves the window page              (/)
-                          ▲
-       /hud ──► edge/chrome --app=http://127.0.0.1:7788/?session=...  (the window)
+        ┌──────────────────────────────────────────┐
+        │  core.js   (agent-agnostic)              │
+        │    GET  /          the window            │
+        │    GET  /events    SSE broadcast         │
+        │    POST /ingest    <- adapters push here │
+        │    GET  /open      opens the window      │
+        └──────────────────────────────────────────┘
+             ▲          ▲          ▲          ▲
+      opencode      claude       codex      anything
 ```
 
-- Several plugin instances are loaded (one per workspace location). The first one to bind port **7788** becomes the data server; the others only register the `/hud` command.
-- The window sends an `EventSource` to `/events` and computes speed and totals client-side, the same way the `token-stats` TUI plugin does: **4 characters ≈ 1 token** over a **60 s sliding window**.
-- `/hud` seeds the window with the session's current totals, then live events keep it up to date.
+- The core binds `127.0.0.1:7788` and relays normalized events over SSE.
+- Adapters translate their agent's telemetry into that one schema. They own no
+  server and spawn the core if it is not already running.
+- The core is idempotent: a second copy exits 0 instead of stealing the port,
+  so several agents can share one window.
+- The window computes tok/s client-side the same way the `token-stats` TUI
+  plugin does: **4 characters ≈ 1 token** over a **60 s sliding window**.
 
-## Uninstall
+## Adding an agent
 
-Delete the plugin folder and remove its line from the `plugins` array. Nothing else is touched.
+Most integrations need no adapter at all — a `curl` in a hook script is
+complete. For a real one, `adapters/lib.mjs` already has the plumbing, and
+[docs/AGENTS.md](docs/AGENTS.md) describes the schema and the pitfalls.
 
-## Notes / limitations
+## Checks
 
-- The Edge app window **cannot be pinned always-on-top** with Edge flags alone (needs extra Win32 calls).
-- The browser is auto-detected (Edge/Chrome); if neither is found, open `http://127.0.0.1:7788/?session=<id>` manually.
-- Speed is **estimated** from character counts, not from provider-reported timing; totals come from real usage events.
-- One shared window per `OPENCODE_SESSION_ID`; running `/hud` again opens another window.
+```bash
+node scripts/selfcheck.mjs        # the core's contract and trust boundary
+node scripts/install.test.mjs     # the installer's merge logic
+npm run check                     # both
+```
+
+Neither needs an agent installed.
+
+## Limitations
+
+- The `--app=` window **cannot be pinned always-on-top** with browser flags
+  alone.
+- Speed is **estimated** from character counts, not provider-reported timing.
+  Totals come from real usage events.
+- `/ingest` is unauthenticated on localhost, by design — any local process can
+  push numbers at it. Browser pages cannot, because the required
+  `Content-Type` forces a CORS preflight the core never answers.
+- One window per session.
 
 ## License
 

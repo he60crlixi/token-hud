@@ -1,23 +1,51 @@
 {
-  "name": "opencode-token-hud",
-  "version": "0.1.0",
+  "name": "token-hud",
+  "version": "0.2.0",
   "private": true,
-  "description": "A separate desktop window that shows live tok/s and token usage for the current OpenCode session, opened with the /hud command.",
+  "description": "Live tok/s and token usage for your coding agent, in a separate always-visible window. One agent-agnostic core, small adapters for OpenCode, Claude Code, Codex and Gemini CLI.",
   "type": "module",
   "main": "index.js",
   "exports": {
-    ".": "./index.js"
+    ".": "./index.js",
+    "./core": "./core.js",
+    "./adapters/opencode": "./adapters/opencode.js"
   },
+  "bin": {
+    "token-hud": "bin/token-hud.mjs"
+  },
+  "scripts": {
+    "start": "node bin/token-hud.mjs",
+    "check": "node scripts/selfcheck.mjs && node scripts/install.test.mjs",
+    "install-agents": "node scripts/install.mjs"
+  },
+  "files": [
+    "core.js",
+    "index.js",
+    "page.html",
+    "bin",
+    "adapters",
+    "scripts",
+    "docs",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
   "license": "MIT",
   "keywords": [
-    "opencode",
-    "opencode-plugin",
     "tokens",
     "tok/s",
-    "hud"
+    "hud",
+    "token-usage",
+    "opencode",
+    "opencode-plugin",
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "llm",
+    "cli",
+    "developer-tools"
   ],
   "dependencies": {
-    "@opencode/client": "2.0.16",
     "@opencode/plugin": "2.0.16"
   }
 }
