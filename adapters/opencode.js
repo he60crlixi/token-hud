@@ -19,11 +19,22 @@
 
 import { Plugin } from "@opencode/plugin"
 import { spawn } from "node:child_process"
+import { appendFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
+import { findRuntime } from "./lib.mjs"
 
 const PORT = Number(process.env.HUD_PORT || 7788)
 const BASE = "http://127.0.0.1:" + PORT
 const CORE = fileURLToPath(new URL("../core.js", import.meta.url))
+const LOG = fileURLToPath(new URL("../hud.log", import.meta.url))
+
+// Same file the core appends to, so a failed /hud leaves a trace somewhere the
+// user can actually find. The plugin host swallows our exceptions otherwise.
+function log(message) {
+  try {
+    appendFileSync(LOG, new Date().toISOString() + " [adapter] " + message + "\n")
+  } catch {}
+}
 
 const RELAY = new Set([
   "session.text.delta",
@@ -52,15 +63,28 @@ async function alive() {
 // so spawning unconditionally is safe. We still ping first to skip the spawn.
 async function ensureCore() {
   if (await alive()) return true
-  try {
-    spawn(process.execPath, [CORE], { detached: true, stdio: "ignore" }).unref()
-  } catch {
+
+  // Never process.execPath: inside this host that is OpenCode.exe itself, and
+  // spawning it re-launches the host instead of running the core. See
+  // findRuntime in lib.mjs.
+  const runtime = findRuntime()
+  if (!runtime) {
+    log("no JS runtime to start the core with; set HUD_RUNTIME to a node or bun executable")
     return false
   }
-  for (let i = 0; i < 40; i++) {
+
+  try {
+    spawn(runtime, [CORE], { detached: true, stdio: "ignore" }).unref()
+  } catch (error) {
+    log("spawn failed via " + runtime + ": " + String(error))
+    return false
+  }
+
+  for (let i = 0; i < 60; i++) {
     await sleep(50)
     if (await alive()) return true
   }
+  log("core did not answer " + BASE + " within 3s of starting via " + runtime)
   return false
 }
 

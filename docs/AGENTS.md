@@ -83,13 +83,19 @@ those adapters has a `--probe` mode that prints exactly what it sees. **Run
 Most of the work is already in `adapters/lib.mjs`: `ingest()`, `readStdin()`,
 `readState()`, `readFrom()`, `newestFile()`, `parseLines()`.
 
-Two rules:
+Three rules:
 
 1. **Never block or fail the agent.** A Claude Code hook that exits non-zero can
    block a tool call; a Gemini CLI hook that prints to stdout breaks JSON
    parsing. Swallow your own errors, exit 0, and on Gemini print only to stderr.
 2. **Never re-read a whole log file.** Agents append megabytes. Use
    `readFrom(path, offset)` and persist the offset with `readState`/`writeState`.
+3. **Never spawn `process.execPath` to start the core.** The OpenCode plugin
+   host is a compiled Bun binary, so its `execPath` is `OpenCode.exe` — spawning
+   it re-launches the host, which receives the core's path as a project
+   directory and dies with `ENOTDIR`. The core never binds and `/hud` is
+   silently inert. Use `findRuntime()` from `lib.mjs`, or `HUD_RUNTIME` to
+   override. `scripts/adapter.test.mjs` is the regression test for this.
 
 The laziest adapter is no adapter at all:
 

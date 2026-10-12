@@ -5,12 +5,44 @@
 // observes. A Claude Code hook that returns non-zero can block a tool call, so
 // everything here swallows its own errors and exits fast.
 
-import { readFileSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { readFileSync, writeFileSync, readdirSync, statSync, openSync, readSync, closeSync, existsSync } from "node:fs"
+import { tmpdir, homedir } from "node:os"
 import { join } from "node:path"
 
 export const PORT = Number(process.env.HUD_PORT || 7788)
 export const BASE = "http://127.0.0.1:" + PORT
+
+// A compiled Bun binary reports itself as process.execPath, so spawning
+// process.execPath re-launches the *host* instead of running the script. That
+// is exactly what happens inside the OpenCode plugin host, whose execPath is
+// OpenCode.exe: it received the core's path as a project directory and failed
+// with ENOTDIR. So resolve a real interpreter instead, and never hand back
+// something that is not one.
+//
+// Arguments exist so the decision can be tested; production calls it bare.
+export function findRuntime(execPath = process.execPath, bun = globalThis.Bun, env = process.env) {
+  if (env.HUD_RUNTIME) return env.HUD_RUNTIME
+
+  const base = String(execPath || "").split(/[\\/]/).pop().toLowerCase()
+  if (/^(node|bun|deno)(\.exe)?$/.test(base)) return execPath
+
+  const candidates = []
+  if (bun && typeof bun.which === "function") {
+    candidates.push(bun.which("node"), bun.which("bun"))
+  }
+  if (process.platform === "win32") {
+    candidates.push(
+      join(env.ProgramFiles || "C:\\Program Files", "nodejs", "node.exe"),
+      join(env.LOCALAPPDATA || "", "Programs", "nodejs", "node.exe"),
+      join(env.APPDATA || "", "npm", "node_modules", "bun", "bin", "bun.exe"),
+    )
+  } else {
+    candidates.push("/usr/local/bin/node", "/usr/bin/node", join(homedir(), ".bun", "bin", "bun"))
+  }
+
+  // .cmd/.ps1 shims are not spawnable without a shell, so they do not count.
+  return candidates.find((path) => typeof path === "string" && existsSync(path) && !/\.(cmd|bat|ps1)$/i.test(path)) || null
+}
 
 export async function ingest(type, data) {
   try {

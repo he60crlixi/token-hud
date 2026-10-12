@@ -15,7 +15,7 @@
   },
   "scripts": {
     "start": "node bin/token-hud.mjs",
-    "check": "node scripts/selfcheck.mjs && node scripts/install.test.mjs",
+    "check": "node scripts/selfcheck.mjs && node scripts/adapter.test.mjs && node scripts/install.test.mjs",
     "install-agents": "node scripts/install.mjs"
   },
   "files": [
